@@ -21,8 +21,3 @@ class ExpectedKeysNotFoundError(BaseError):
 class UnexpectedStatusError(BaseError):
     """Обнаружен недокументированный статус домашней работы в ответе API."""
     pass
-
-
-class NewStatusNotFoundError(BaseError):
-    """В ответе отсутствуют новые статусы."""
-    pass
