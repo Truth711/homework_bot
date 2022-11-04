@@ -10,12 +10,11 @@ import telegram
 
 from dotenv import load_dotenv
 
-from errors import (
+from exceptions import (
+    SendMessageError,
     UnexpectedStatusCodeError,
     ExpectedKeysNotFoundError,
     UnexpectedStatusError,
-    NewStatusNotFoundError,
-    TokenNotFoundError,
 )
 
 load_dotenv()
@@ -55,8 +54,8 @@ def send_message(bot, message):
     try:
         bot.send_message(TELEGRAM_CHAT_ID, message)
         logger.info("Сообщение успешно отправлено в Telegram: %s", message)
-    except Exception:
-        logger.exception("Сбой в отправке сообщения!", exc_info=True)
+    except Exception as exc:
+        raise SendMessageError("Не удалось отправить сообщение.") from exc
 
 
 def get_api_answer(current_timestamp):
@@ -67,23 +66,27 @@ def get_api_answer(current_timestamp):
     """
     timestamp = current_timestamp or int(time.time())
     params = {'from_date': timestamp}
-    response = requests.get(
-        ENDPOINT,
-        headers=HEADERS,
-        params=params,
-        timeout=30,
-    )
-    if response.status_code != 200:
-        logger.error(
-            "Не удалось соединиться с сервером. Код ответа: %s",
-            response.status_code
+    try:
+        response = requests.get(
+            ENDPOINT,
+            headers=HEADERS,
+            params=params,
+            timeout=30,
         )
-        raise UnexpectedStatusCodeError
-    if not response:
-        logger.error("Сервер не отвечает на запросы к эндпоинту.")
-        raise ConnectionError
-
-    return response.json()
+        if response.status_code != 200:
+            raise UnexpectedStatusCodeError(
+                "Не удалось соединиться с сервером."
+                f"Код ответа: {response.status_code}"
+                f"URL запроса: {ENDPOINT}"
+                f"headers: {HEADERS}"
+                f"params: {params}"
+            )
+        json_response = response.json()
+    except Exception as exp:
+        raise ConnectionError(
+            "Ответ от сервера не получен/Формат ответа отличен от JSON "
+        ) from exp
+    return json_response
 
 
 def check_response(response):
@@ -93,25 +96,16 @@ def check_response(response):
     то функция должна вернуть список домашних работ (он может быть и пустым),
     доступный в ответе API по ключу 'homeworks'.
     """
-    expected_keys = {'current_date', 'homeworks'}
-
     if not isinstance(response, dict):
-        logger.error("Ответ сервер не является словарем.")
-        raise TypeError
+        raise TypeError("Ответ сервер не является словарем.")
 
-    if not expected_keys.issubset(set(response.keys())):
-        logger.error("Ответ не содержит ожидаемых ключей.")
-        raise ExpectedKeysNotFoundError
+    if 'current_date' not in response and 'homeworks' not in response:
+        raise ExpectedKeysNotFoundError("Ответ не содержит ожидаемых ключей.")
 
     homeworks = response.get('homeworks')
 
     if not isinstance(homeworks, list):
-        logger.error("homeworks не является списком.")
-        raise TypeError
-
-    if not homeworks:
-        logger.debug("Новых статусов нет.")
-        raise NewStatusNotFoundError
+        raise TypeError("homeworks не является списком.")
 
     return homeworks
 
@@ -126,11 +120,9 @@ def parse_status(homework):
     homework_name = homework.get('homework_name')
     homework_status = homework.get('status')
     if not homework_name:
-        logger.error("Имя работы не обнаружено.")
-        raise KeyError
+        raise KeyError("Имя работы не обнаружено.")
     if homework_status not in HOMEWORK_STATUSES:
-        logger.error("Обнаружен недокументированный статус.")
-        raise UnexpectedStatusError
+        raise UnexpectedStatusError("Обнаружен недокументированный статус.")
 
     verdict = HOMEWORK_STATUSES.get(homework_status)
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
@@ -152,33 +144,39 @@ def main():
         for key, value in token_dict.items():
             if not value:
                 logger.critical(
-                    "Выполнение команды приостановлено. "
-                    "Отсутствует обязательная переменная окружения: %s", key)
-                raise TokenNotFoundError()
+                    "Отсутствует обязательная переменная окружения: %s", key
+                )
+        sys.exit(
+            "Выполнение команды приостановлено."
+            "Отсутствует обязательная переменная окружения."
+        )
 
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     current_timestamp = int(time.time())
-    last_message = []
+    last_message = ""
     while True:
         try:
             response = get_api_answer(current_timestamp)
+            current_timestamp = response.get('current_date')
             homeworks = check_response(response)
-            homework = homeworks[0]
+            if homeworks:
+                homework = homeworks[0]
+                message = parse_status(homework)
+            else:
+                logger.debug("Новых статусов нет.")
+                time.sleep(RETRY_TIME)
+                continue
+        except Exception as exc:
+            message = f"Сбой в работе программы: {exc}"
+            logger.exception(exc, exc_info=True)
 
-        except NewStatusNotFoundError:
-            pass
-        except Exception as error:
-            message = f"Сбой в работе программы: {repr(error)}"
-            if message not in last_message:
-                last_message.clear()
-                last_message.append(message)
+        if last_message != message:
+            last_message = message
+            try:
                 send_message(bot, message)
-        else:
-            message = parse_status(homework)
-            send_message(bot, message)
-        finally:
-            current_timestamp = int(time.time())
-            time.sleep(RETRY_TIME)
+            except SendMessageError:
+                logger.exception("Сбой в отправке сообщения!")
+        time.sleep(RETRY_TIME)
 
 
 if __name__ == '__main__':
