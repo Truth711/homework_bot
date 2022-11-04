@@ -159,13 +159,12 @@ def main():
             response = get_api_answer(current_timestamp)
             current_timestamp = response.get('current_date')
             homeworks = check_response(response)
-            if homeworks:
-                homework = homeworks[0]
-                message = parse_status(homework)
-            else:
-                logger.debug("Новых статусов нет.")
-                time.sleep(RETRY_TIME)
-                continue
+            homework = homeworks[0]
+            message = parse_status(homework)
+        except IndexError:
+            logger.debug("Новых статусов нет.")
+            time.sleep(RETRY_TIME)
+            continue
         except Exception as exc:
             message = f"Сбой в работе программы: {exc}"
             logger.exception(exc, exc_info=True)
