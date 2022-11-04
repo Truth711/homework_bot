@@ -141,14 +141,14 @@ def main():
             'TELEGRAM_TOKEN': TELEGRAM_TOKEN,
             'TELEGRAM_CHAT_ID': TELEGRAM_CHAT_ID,
         }
-        for key, value in token_dict.items():
-            if not value:
-                logger.critical(
-                    "Отсутствует обязательная переменная окружения: %s", key
-                )
+        missing = [key for key, value in token_dict.items() if not value]
+        logger.critical(
+            "Отсутствуют обязательные переменные окружения: %s",
+            ", ".join(missing)
+        )
         sys.exit(
             "Выполнение команды приостановлено."
-            "Отсутствует обязательная переменная окружения."
+            "Отсутствуют обязательные переменные окружения."
         )
 
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
